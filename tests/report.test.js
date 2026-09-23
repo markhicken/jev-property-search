@@ -11,11 +11,19 @@ import {
   isPrivateRoom,
   listingAgeDays,
   listingFacts,
+  lotSqftValue,
   mergeDetail,
   mismatchesHomeType,
   priceValue,
   rankListings,
   selectListings,
+  listingAddress,
+  mapsUrl,
+  sortByValue,
+  sqftValue,
+  valueBenchmarks,
+  valueMetrics,
+  valueRatio,
 } from "../jev_ultrafast/static/report.js";
 
 const listing = (overrides = {}) => ({
@@ -73,6 +81,15 @@ test("home type still fails when the card contradicts the request", () => {
 test("home type stays unknown with no signal at all", () => {
   assert.equal(homeCheck("flat", "great location, must see"), "unknown");
   assert.equal(homeCheck("house", "great location, must see"), "unknown");
+});
+
+test("multi-family matches duplex/triplex/fourplex and rejects flats or single-family houses", () => {
+  assert.equal(homeCheck("multifamily", "charming duplex, both units updated"), "pass");
+  assert.equal(homeCheck("multifamily", "turnkey triplex, three units"), "pass");
+  assert.equal(homeCheck("multifamily", "fourplex investment opportunity"), "pass");
+  assert.equal(homeCheck("multifamily", "modern one-bedroom apartment"), "fail");
+  assert.equal(homeCheck("multifamily", "charming single-family house with a yard"), "fail");
+  assert.equal(homeCheck("multifamily", "great location, must see"), "unknown");
 });
 
 test("a card that states its city and unit can qualify", () => {
@@ -213,6 +230,17 @@ test("private rooms, shares, and roommate ads are excluded", () => {
   assert.equal(select(groups).matches, 0);
 });
 
+test("the private-room exclusion only applies to rentals, not for-sale listings", () => {
+  const groups = [
+    {
+      source: "craigslist",
+      listings: [listing({ href: "room", title: "Private room in a shared flat", summary: "private room" })],
+    },
+  ];
+  assert.equal(select(groups, { mode: "rent" }).matches, 0, "rent mode excludes private rooms");
+  assert.equal(select(groups, { mode: "buy" }).matches, 1, "buy mode does not exclude on room wording");
+});
+
 test("hrefs are deduplicated across sources", () => {
   const shared = listing({ href: "https://example.test/shared" });
   const groups = [
@@ -285,6 +313,107 @@ test("priceValue parses currency and rejects non-numeric prices", () => {
   assert.equal(priceValue(""), null);
   assert.equal(priceValue("Call for price"), null);
   assert.equal(priceValue(undefined), null);
+});
+
+test("sqftValue parses living-area square footage", () => {
+  assert.equal(sqftValue("1,800 sqft"), 1800);
+  assert.equal(sqftValue("900ft2"), 900);
+  assert.equal(sqftValue(""), null);
+  assert.equal(sqftValue(undefined), null);
+});
+
+test("lotSqftValue normalizes acres and labeled lot square footage to one scale", () => {
+  assert.equal(lotSqftValue("0.25 acres"), 0.25 * 43560);
+  assert.equal(lotSqftValue("1.2 ac lot"), 1.2 * 43560);
+  assert.equal(lotSqftValue("10,890 sqft lot"), 10890);
+  // A living-area sqft mention with no "lot" qualifier is not a lot size.
+  assert.equal(lotSqftValue("1,800 sqft"), null);
+  assert.equal(lotSqftValue(""), null);
+});
+
+test("valueMetrics computes price-efficiency ratios only when their inputs exist", () => {
+  const full = valueMetrics({ priceValue: 435600, sqft: "1,800 sqft", lot: "0.5 acres" });
+  assert.equal(full.pricePerSqft, 242);
+  assert.equal(full.pricePerAcre, 435600 / 0.5);
+  assert.equal(full.pricePerTotalSqft, 435600 / (1800 + 0.5 * 43560));
+  const sqftOnly = valueMetrics({ priceValue: 435600, sqft: "1,800 sqft" });
+  assert.equal(sqftOnly.pricePerSqft, 242);
+  assert.equal(sqftOnly.pricePerAcre, null);
+  assert.equal(sqftOnly.pricePerTotalSqft, null);
+  const none = valueMetrics({ price: "Call for price" });
+  assert.deepEqual(none, { pricePerSqft: null, pricePerAcre: null, pricePerTotalSqft: null });
+});
+
+test("sortByValue orders by the chosen ratio and pushes listings missing it to the end", () => {
+  const cheap = { href: "cheap", priceValue: 200000, sqft: "2,000 sqft" }; // $100/sqft
+  const pricey = { href: "pricey", priceValue: 300000, sqft: "1,000 sqft" }; // $300/sqft
+  const noSqft = { href: "no-sqft", priceValue: 100000 };
+  const sorted = sortByValue([pricey, noSqft, cheap], "price_per_sqft");
+  assert.deepEqual(sorted.map((item) => item.href), ["cheap", "pricey", "no-sqft"]);
+  // An unknown sort key is a no-op so the caller's own order is preserved.
+  assert.deepEqual(sortByValue([pricey, cheap], "default"), [pricey, cheap]);
+});
+
+test("sortByValue value_ratio ranks the best value first and pushes listings with no metric last", () => {
+  // Against the set median, cheaper per sqft = higher value ratio = ranked earlier.
+  const great = { href: "great", priceValue: 100000, sqft: "2,000 sqft" }; // $50/sqft
+  const fair = { href: "fair", priceValue: 200000, sqft: "2,000 sqft" }; // $100/sqft
+  const pricey = { href: "pricey", priceValue: 400000, sqft: "2,000 sqft" }; // $200/sqft
+  const noMetric = { href: "no-metric", priceValue: 150000 };
+  const sorted = sortByValue([fair, noMetric, pricey, great], "value_ratio");
+  assert.deepEqual(sorted.map((item) => item.href), ["great", "fair", "pricey", "no-metric"]);
+});
+
+test("valueBenchmarks takes the median price per sqft and per acre across the set", () => {
+  const listings = [
+    { priceValue: 200000, sqft: "2,000 sqft", lot: "0.5 acres" }, // $100/sqft, $400k/acre
+    { priceValue: 300000, sqft: "1,500 sqft", lot: "1 acre" }, // $200/sqft, $300k/acre
+    { priceValue: 300000, sqft: "1,000 sqft" }, // $300/sqft, no lot
+  ];
+  const benchmarks = valueBenchmarks(listings);
+  assert.equal(benchmarks.pricePerSqft, 200); // median of 100, 200, 300
+  assert.equal(benchmarks.pricePerAcre, 350000); // median of the two lots: 400k, 300k
+  assert.deepEqual(valueBenchmarks([]), { pricePerSqft: null, pricePerAcre: null });
+});
+
+test("valueRatio rewards beating both benchmarks and needs at least one metric", () => {
+  const benchmarks = { pricePerSqft: 200, pricePerAcre: 400000 };
+  // $100/sqft and $200k/acre: twice as cheap on both, geometric mean is 2x.
+  const bargain = { priceValue: 200000, sqft: "2,000 sqft", lot: "1 acre" };
+  assert.equal(valueRatio(bargain, benchmarks), 2);
+  // Cheap per sqft but pricey per acre: the geometric mean lands near typical.
+  const mixed = { priceValue: 400000, sqft: "4,000 sqft", lot: "0.5 acres" }; // $100/sqft, $800k/acre
+  assert.ok(Math.abs(valueRatio(mixed, benchmarks) - 1) < 1e-9);
+  // Only price/sqft is known, so the ratio rests on that single metric.
+  assert.equal(valueRatio({ priceValue: 200000, sqft: "2,000 sqft" }, benchmarks), 2);
+  // No usable metric at all.
+  assert.equal(valueRatio({ price: "Call for price" }, benchmarks), null);
+  assert.equal(valueRatio({ priceValue: 200000, sqft: "2,000 sqft" }, { pricePerSqft: null, pricePerAcre: null }), null);
+});
+
+test("listingAddress uses the street address, never the listing title", () => {
+  // No street address (common on Craigslist/Facebook): return null so the card hides its
+  // address actions rather than copying/mapping a meaningless headline.
+  assert.equal(listingAddress({ title: "4 Bed/2 Bath Move in Ready!" }, "Meridian, ID"), null);
+  // A full address with a state is used as-is.
+  assert.equal(
+    listingAddress({ address: "742 Evergreen Terrace, Austin, TX", title: "Cozy home" }, "Austin, TX"),
+    "742 Evergreen Terrace, Austin, TX",
+  );
+  // A bare street address gains the search location for disambiguation.
+  assert.equal(
+    listingAddress({ address: "742 Evergreen Terrace" }, "Austin, TX"),
+    "742 Evergreen Terrace, Austin, TX",
+  );
+  // A ZIP counts as a region, so nothing is appended.
+  assert.equal(listingAddress({ address: "742 Evergreen Terrace 78704" }, "Austin, TX"), "742 Evergreen Terrace 78704");
+});
+
+test("mapsUrl builds a Google Maps search link with an encoded address", () => {
+  assert.equal(
+    mapsUrl("742 Evergreen Terrace, Austin, TX"),
+    "https://www.google.com/maps/search/?api=1&query=742%20Evergreen%20Terrace%2C%20Austin%2C%20TX",
+  );
 });
 
 test("escapeHtml neutralizes markup and attribute injection", () => {

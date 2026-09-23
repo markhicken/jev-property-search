@@ -7,6 +7,12 @@ __pycache__/
 .ruff_cache/
 .DS_Store
 artifacts/
+
+# Per-user UI settings the server persists between runs.
+.hearth-settings.json
+
+# MCP server log
+mcp-server.log
 *.egg-info/
 
 dist/

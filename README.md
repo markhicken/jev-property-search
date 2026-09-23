@@ -35,34 +35,17 @@ cp .env.example .env
 
 Open `.env` and set `TYPESAFE_API_KEY`. Nothing else is required.
 
-**3. Start a Chrome that Hearth may drive**
-
-Use a separate profile, not your everyday one.
+**3. Start Hearth**
 
 ```bash
-# macOS
-profile=$(mktemp -d /tmp/hearth-chrome.XXXXXX)
-open -na 'Google Chrome' --args --remote-debugging-port=9222 \
-  --user-data-dir="$profile" --no-first-run --no-default-browser-check about:blank
-
-# Linux
-google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/hearth-chrome \
-  --no-first-run --no-default-browser-check about:blank
+./start.sh
 ```
 
-**4. Run Hearth**
+The script launches a fresh, isolated Chrome profile for Hearth to drive, starts the server, and opens the
+app for you. Wait for the header to say **Jev ready**.
 
-```bash
-BU_CDP_URL=http://127.0.0.1:9222 uv run jev
-```
-
-**5. Open it**
-
-Open <http://127.0.0.1:8766> in your normal Chrome. The header should say **Jev ready**.
-
-Two Chromes are involved. The one from step 3 is the browser Hearth controls, and the one from step 5 only
-displays the app. If the header does not say **Jev ready**, the key in `.env` was not picked up, so restart
-the server.
+If it does not say **Jev ready**, the key in `.env` was not picked up, so stop the script (`Ctrl+C`) and run
+it again. The script cleans up the Chrome profile it created when you stop it.
 
 ## Using Hearth
 
@@ -90,15 +73,16 @@ hand in the agent's Chrome window, press **Continue with this source** to resume
 Craigslist works straight away. Facebook Marketplace, Redfin and Zillow often work better with a signed-in
 session, and some of them show a bot check without one.
 
-Sign in as usual in your own browser, export those cookies, and load them into the Chrome Hearth drives:
+Sign in as usual in your own browser and export those cookies. Then, **while Hearth is running** (from
+`./start.sh`), load them into the Chrome it drives from a second terminal:
 
 ```bash
-uv run python scripts/load_cookies.py ~/Downloads/cookies.json
+BU_CDP_URL=http://127.0.0.1:47913 uv run python scripts/load_cookies.py ~/Downloads/cookies.json
 ```
 
-The cookies are written into that Chrome's profile, so they survive restarts. They are live credentials:
-keep the export outside this repository (`.gitignore` already blocks `cookies*.json`), and rotate anything
-you have shared.
+`start.sh` creates a fresh, throwaway Chrome profile on every run and removes it on exit, so cookies do **not**
+survive restarts — re-run this command each time you start Hearth. They are live credentials: keep the export
+outside this repository (`.gitignore` already blocks `cookies*.json`), and rotate anything you have shared.
 
 ## Good to know
 

@@ -114,6 +114,10 @@
   // Comma groups must be exactly three digits, so a card whose price runs into the next
   // word ("$3,6501 Bed 1 Bath") yields $3,650 instead of $3,6501.
   const pricePattern=/\$\s?\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:\s*(?:\+|[-–])\s*\$?\d{1,3}(?:,\d{3})*)?(?:\s*\/\s*mo)?/i;
+  // Lot size arrives as acres ("0.25 Acres") or a labeled square footage ("10,890 sqft
+  // lot"); the "lot" qualifier keeps a labeled sqft mention from being confused with
+  // living-area sqft, which acres never is.
+  const lotPattern=/[\d,]+\.?\d*\s*(?:acres?|ac\b)|[\d,]+\s*(?:ft²|ft2|sq\.?\s*ft\.?s?|sqft)\s*lot/i;
   // Amenity keywords only; a listing is never credited with one it does not mention.
   const amenityWords=['parking','garage','laundry','washer','dryer','dishwasher','gym','fitness',
     'pool','pets','furnished','balcony','patio','air conditioning','elevator','doorman','storage',
@@ -146,11 +150,12 @@
     const beds=summary.match(/(?:studio|\b\d{1,2}\s*(?:bd|bed|br)s?\b)/i)?.[0]||'';
     const baths=summary.match(/\b\d{1,2}(?:\.\d+)?\s*(?:ba|bath)s?\b/i)?.[0]||'';
     const sqft=summary.match(/[\d,]+\s*(?:ft²|ft2|sq\.?\s*ft\.?s?|sqft)/i)?.[0]||'';
+    const lot=summary.match(lotPattern)?.[0]||'';
     const address=card?.querySelector('address')?.innerText?.trim()||'';
     const time=card?.querySelector('time');
     const posted_at=time?.getAttribute('datetime')||'';
     const posted_text=time?.innerText?.trim()||'';
-    const entry={href,title:anchorTitle||summary.slice(0,180),price,beds,baths,sqft,address,posted_at,posted_text,
+    const entry={href,title:anchorTitle||summary.slice(0,180),price,beds,baths,sqft,lot,address,posted_at,posted_text,
       image,summary:summary.slice(0,700),fromLink:Boolean(anchorTitle)};
     const existing=listingByHref.get(href);
     if (!existing) listingByHref.set(href,entry);
@@ -159,7 +164,7 @@
       const better=entry.fromLink!==existing.fromLink ? entry.fromLink :
         entry.title.length>existing.title.length;
       const merged=better?entry:existing, other=better?existing:entry;
-      for (const key of ['image','beds','baths','sqft']) if (!merged[key]) merged[key]=other[key]||'';
+      for (const key of ['image','beds','baths','sqft','lot']) if (!merged[key]) merged[key]=other[key]||'';
       listingByHref.set(href,merged);
     }
     if (listingByHref.size>=24) break;
@@ -191,6 +196,7 @@
       beds:scan.match(/(?:studio|\d+(?:\.\d+)?\s*(?:bd|bed|br)s?\b)/i)?.[0]||'',
       baths:scan.match(/\d+(?:\.\d+)?\s*(?:ba|bath)s?\b/i)?.[0]||'',
       sqft:scan.match(/[\d,]+\s*(?:ft²|ft2|sq\.?\s*ft\.?s?|sqft)/i)?.[0]||'',
+      lot:scan.match(lotPattern)?.[0]||'',
       posted,
       description,
       amenities:amenityWords.filter(word=>new RegExp('\\b'+word.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),

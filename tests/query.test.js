@@ -51,6 +51,12 @@ test("home type is read from apartment, studio, and house words", () => {
   assert.equal(parseSearchQuery("apartment or house").homeType, null);
 });
 
+test("home type recognizes multi-family properties", () => {
+  assert.equal(parseSearchQuery("multi-family in Oakland").homeType, "multifamily");
+  assert.equal(parseSearchQuery("a duplex near BART").homeType, "multifamily");
+  assert.equal(parseSearchQuery("triplex under $800,000").homeType, "multifamily");
+});
+
 test("location is read from a capitalized place after in/near", () => {
   assert.equal(parseSearchQuery("in Oakland").location, "Oakland");
   assert.equal(parseSearchQuery("a flat in San Francisco, CA").location, "San Francisco");

@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from .agent import Agent
 from .browser import StalePage
 from .questions import MAX_STEPS
+from .urls import build_start_url
 
 STATIC_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 STATIC_MIME = {
@@ -64,6 +65,39 @@ def load_environment():
 
 
 DEFAULT_PRICE_PER_BTOK = 42.0
+
+
+def settings_path():
+    """UI preferences live in the working directory, outside Chrome's per-run profile."""
+    return Path.cwd() / ".hearth-settings.json"
+
+
+def load_settings():
+    try:
+        data = json.loads(settings_path().read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def valid_setting_value(value):
+    if isinstance(value, (bool, int, float)):
+        return True
+    if isinstance(value, str):
+        return len(value) <= 2000
+    if isinstance(value, list):
+        return len(value) <= 16 and all(isinstance(item, str) and len(item) <= 200 for item in value)
+    return False
+
+
+def save_settings(data):
+    """Persist a flat map of UI settings. Rejects anything larger or oddly shaped."""
+    if not isinstance(data, dict) or len(data) > 32:
+        raise ValueError("Invalid settings")
+    for key, value in data.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key) or not valid_setting_value(value):
+            raise ValueError("Invalid settings")
+    settings_path().write_text(json.dumps(data))
 
 
 def reported_price(name, default=None):
@@ -130,25 +164,33 @@ def command(name, body):
         goal = body.get("goal", "").strip()
         if not goal or len(goal) > 2000:
             raise ValueError("Enter 1–2,000 characters")
+        location = body.get("location", "").strip()
+        if len(location) > 200:
+            raise ValueError("Location must be 200 characters or fewer")
+        mode = body.get("mode", "rent")
+        if mode not in {"rent", "buy"}:
+            raise ValueError("Unknown search mode")
+        scope = body.get("scope", "metro")
+        if scope not in {"city", "metro", "nearby"}:
+            raise ValueError("Unknown search area")
         close_browser()
-        real_urls = {
-            "flights": "https://www.google.com/travel/flights?hl=en",
-            "marketplace": "https://www.facebook.com/marketplace/category/propertyrentals/",
-            "craigslist": (
-                "https://www.craigslist.org/search/city/san-francisco-ca"
-                "?cat=apa&lat=37.7429&lon=-122.433&radius=4.8#search=2~gallery~6"
-            ),
-            "redfin": "https://www.redfin.com/city/17151/CA/San-Francisco/apartments-for-rent",
-            "zillow": "https://www.zillow.com/san-francisco-ca/rentals/",
-        }
+        marketplaces = {"marketplace", "craigslist", "redfin", "zillow"}
+        if scenario in marketplaces:
+            start_url = build_start_url(scenario, location, mode, scope).url
+        elif scenario == "flights":
+            start_url = "https://www.google.com/travel/flights?hl=en"
+        else:
+            start_url = f"{ORIGIN}/fixture.html?scenario={scenario}"
         AGENT = Agent(
-            real_urls.get(scenario, f"{ORIGIN}/fixture.html?scenario={scenario}"),
+            start_url,
             goal,
             screenshots=True,
             record_dir=Path.cwd() / "artifacts" / "frames" if body.get("record") else None,
             text_values=text_values,
         )
         AGENT.state["scenario"] = scenario
+        AGENT.state["mode"] = mode
+        AGENT.state["scope"] = scope
     else:
         if AGENT is None:
             raise ValueError("Start a demo first")
@@ -179,6 +221,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             with LOCK:
                 return self.send(200, json.dumps(response_state()))
+        if path == "/api/settings":
+            return self.send(200, json.dumps(load_settings()))
         if path == "/demo.mp4":
             video = ROOT.parent / "docs" / "demo.mp4"
             if video.exists():
@@ -213,6 +257,16 @@ class Handler(BaseHTTPRequestHandler):
             or not origin_allowed(self.headers.get("Origin"), host)
         ):
             return self.send(403, json.dumps({"error": "Local demo requests only"}))
+        # Saving UI settings never touches the browser, so it skips the step lock.
+        if self.path == "/api/settings":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length < 8192:
+                    raise ValueError("Invalid request size")
+                save_settings(json.loads(self.rfile.read(length)))
+                return self.send(200, json.dumps({"ok": True}))
+            except (ValueError, OSError) as error:
+                return self.send(400, json.dumps({"error": str(error)}))
         if not LOCK.acquire(blocking=False):
             return self.send(409, json.dumps({"error": "A browser step is already running"}))
         try:

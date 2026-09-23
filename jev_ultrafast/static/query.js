@@ -29,6 +29,7 @@ const UNIT_AFTER = /^\s*(?:sq\.?\s?ft|sqft|square|sq\b|bd\b|bed|bath|ba\b|br\b|m
 const TYPE_PATTERNS = [
   [/\bstudios?\b/i, "studio"],
   [/\b(?:apartments?|flats?|condos?|condominiums?|lofts?)\b/i, "flat"],
+  [/\b(?:multi[- ]?family|duplex(?:es)?|triplex(?:es)?|fourplex(?:es)?)\b/i, "multifamily"],
   [/\b(?:houses?|townhouses?|townhomes?|single[- ]family)\b/i, "house"],
 ];
 

@@ -371,6 +371,11 @@ main { display: grid; grid-template-columns: 310px minmax(0, 1fr); min-height: c
 .report-head { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
 .report-head h3 { margin: 0; font: 400 26px/1 "Instrument Serif", Georgia, serif; }
 .report-head > span { padding: 6px 9px; border-radius: 999px; background: #e2e9d9; color: #4b6350; font-size: 9px; }
+/* Match the settings-panel select styling, sized down for the report header. */
+.sort-field { display: flex; align-items: center; gap: 9px; color: #6d756b; font-size: 10px; white-space: nowrap; }
+.sort-field .field { min-height: 34px; }
+.sort-field .select-field { padding-right: 32px; }
+.sort-field select { width: auto; padding: 0; }
 .report-context { margin: 9px 0 16px; color: #747c74; font-size: 10px; }
 .report-badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
 .report-badges span { padding: 4px 8px; border-radius: 999px; font-size: 8px; font-weight: 600; letter-spacing: .3px; }
@@ -379,6 +384,11 @@ main { display: grid; grid-template-columns: 310px minmax(0, 1fr); min-height: c
 .listing-facts span.missing { background: #f1ede4; color: #9a958c; font-style: italic; }
 .listing-address { display: block; margin: 3px 0 0; color: #6f776f; font-size: 9px; }
 .listing-facts span.amenity { background: #e7ecdf; color: #4f6a4a; }
+.listing-facts span.value-ratio { font-weight: 600; }
+.listing-facts span.value-ratio.good { background: #d8ecd6; color: #2f6a3c; }
+.listing-facts span.value-ratio.mild { background: #e6efe0; color: #4f6a4a; }
+.listing-facts span.value-ratio.fair { background: #eef0e8; color: #687169; }
+.listing-facts span.value-ratio.poor { background: #f4e3dd; color: #9a5540; }
 .report-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(235px,300px)); justify-content: start; gap: 12px; }
 .listing-card { position: relative; min-width: 0; overflow: hidden; border: 1px solid rgb(32 42 36 / .11); border-radius: 13px; background: #fffefa; transition: transform .16s,box-shadow .16s; }
 .listing-card > a { display: block; color: inherit; text-decoration: none; }
@@ -393,6 +403,11 @@ main { display: grid; grid-template-columns: 310px minmax(0, 1fr); min-height: c
 .listing-facts { min-height: 16px; display: flex; flex-wrap: wrap; gap: 5px; }
 .listing-facts span { padding: 3px 6px; border-radius: 5px; background: #eef0e8; color: #687169; font-size: 8px; }
 .listing-summary { display: -webkit-box; overflow: hidden; margin: 8px 0 0; color: #7c837c; font-size: 9px; line-height: 1.4; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.card-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 10px; border-top: 1px solid rgb(32 42 36 / .09); background: #f7f8f3; }
+.card-action { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 1px solid rgb(32 42 36 / .12); border-radius: 7px; background: #fffefa; color: #56705c; cursor: pointer; text-decoration: none; transition: background .16s, color .16s, border-color .16s; }
+.card-action:hover { background: #e8ecdf; color: #244d3d; border-color: rgb(36 77 61 / .28); }
+.card-action.copied { background: #d8ecd6; color: #2f6a3c; border-color: #2f6a3c; }
+.card-action svg { width: 14px; height: 14px; }
 .target.selected span { background: #db744f; color: white; }
 
 .action-dock { min-height: 76px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 18px; padding: 12px 15px 12px 17px; border-top: 1px solid #e0e1db; background: #fbfbf8; }

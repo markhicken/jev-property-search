@@ -14,6 +14,132 @@ export function priceValue(price) {
   return Number.isFinite(value) ? value : null;
 }
 
+export function sqftValue(sqft) {
+  const match = String(sqft ?? "").match(/[\d,]+/);
+  if (!match) return null;
+  const value = Number(match[0].replaceAll(",", ""));
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+const SQFT_PER_ACRE = 43560;
+const LOT_ACRES = /([\d,]+\.?\d*)\s*(?:acres?|ac\b)/i;
+const LOT_SQFT = /([\d,]+)\s*(?:ft²|ft2|sq\.?\s*ft\.?s?|sqft)\s*lot/i;
+
+// Lot size arrives as either acres ("0.25 acres") or a labeled square footage
+// ("10,890 sqft lot"); both normalize to square feet so they combine with living-area
+// sqft on one scale.
+export function lotSqftValue(lot) {
+  const text = String(lot ?? "");
+  const acres = LOT_ACRES.exec(text);
+  if (acres) {
+    const value = Number(acres[1].replaceAll(",", ""));
+    return Number.isFinite(value) && value > 0 ? value * SQFT_PER_ACRE : null;
+  }
+  const sqft = LOT_SQFT.exec(text);
+  if (sqft) {
+    const value = Number(sqft[1].replaceAll(",", ""));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  return null;
+}
+
+// Three price-efficiency ratios, each null when its inputs are not available rather
+// than assumed. Lot size is rarely exposed by every source, so most listings will
+// only ever price-per-sqft.
+export function valueMetrics(listing) {
+  const price = listing?.priceValue ?? priceValue(listing?.price);
+  const sqft = sqftValue(listing?.sqft);
+  const lotSqft = lotSqftValue(listing?.lot);
+  const totalSqft = sqft != null && lotSqft != null ? sqft + lotSqft : null;
+  return {
+    pricePerSqft: price != null && sqft != null ? price / sqft : null,
+    pricePerAcre: price != null && lotSqft != null ? price / (lotSqft / SQFT_PER_ACRE) : null,
+    pricePerTotalSqft: price != null && totalSqft != null ? price / totalSqft : null,
+  };
+}
+
+// The listing's own street address, with the search location appended for disambiguation
+// when the address omits a state or ZIP. The listing TITLE is never used — it is a headline
+// like "4 Bed/2 Bath Move in Ready!", not an address. Returns null when the listing exposes
+// no address at all (common on Craigslist/Facebook), so callers can hide address actions.
+export function listingAddress(listing, location) {
+  const address = String(listing?.address ?? "").trim();
+  if (!address) return null;
+  const place = String(location ?? "").trim();
+  const hasRegion = /,\s*[A-Za-z]{2}\b|\b\d{5}\b/.test(address);
+  return hasRegion || !place ? address : `${address}, ${place}`;
+}
+
+// A Google Maps search link for an address, used by the map icon on each result card.
+export function mapsUrl(address) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(address ?? "").trim())}`;
+}
+
+// Median of the finite values, the benchmark each listing's value ratio is judged
+// against. Null when nothing in the set exposes the metric.
+function median(values) {
+  const finite = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!finite.length) return null;
+  const mid = Math.floor(finite.length / 2);
+  return finite.length % 2 ? finite[mid] : (finite[mid - 1] + finite[mid]) / 2;
+}
+
+// The typical price-per-sqft and price-per-acre across the current result set. A
+// listing is a good value when it beats both benchmarks.
+export function valueBenchmarks(listings) {
+  return {
+    pricePerSqft: median((listings || []).map((listing) => valueMetrics(listing).pricePerSqft)),
+    pricePerAcre: median((listings || []).map((listing) => valueMetrics(listing).pricePerAcre)),
+  };
+}
+
+// A single value ratio combining price-per-sqft and price-per-acre, each measured
+// against the set benchmark as benchmark/metric so cheaper reads as higher. Above 1
+// means better value than the typical listing on the metrics it exposes; null when
+// neither metric is available. The geometric mean keeps one very cheap dimension from
+// masking a costly one — a good value must beat both, not just average out.
+export function valueRatio(listing, benchmarks) {
+  const metrics = valueMetrics(listing);
+  const ratios = [];
+  if (metrics.pricePerSqft != null && benchmarks?.pricePerSqft) ratios.push(benchmarks.pricePerSqft / metrics.pricePerSqft);
+  if (metrics.pricePerAcre != null && benchmarks?.pricePerAcre) ratios.push(benchmarks.pricePerAcre / metrics.pricePerAcre);
+  if (!ratios.length) return null;
+  const product = ratios.reduce((total, value) => total * value, 1);
+  return product ** (1 / ratios.length);
+}
+
+// Price-efficiency sorts: cheaper is better, so each sorts ascending.
+export const VALUE_SORTS = {
+  price_per_sqft: (listing) => valueMetrics(listing).pricePerSqft,
+  price_per_acre: (listing) => valueMetrics(listing).pricePerAcre,
+  price_per_value: (listing) => valueMetrics(listing).pricePerTotalSqft,
+};
+
+// Listings missing the metric sort after every listing that has it, rather than being
+// assumed best or worst. `descending` puts the highest value first (used by value ratio,
+// where a higher ratio is the better deal).
+function rankByMetric(listings, metric, { descending = false } = {}) {
+  const ranked = [], unranked = [];
+  for (const listing of listings) {
+    const value = metric(listing);
+    (value != null ? ranked : unranked).push({ listing, value });
+  }
+  ranked.sort((a, b) => (descending ? b.value - a.value : a.value - b.value));
+  return [...ranked.map((item) => item.listing), ...unranked.map((item) => item.listing)];
+}
+
+export function sortByValue(listings, key) {
+  // The value ratio is relative to the whole set, so it needs the set benchmark, and a
+  // higher ratio is the better value — hence a descending sort, unlike the price ratios.
+  if (key === "value_ratio") {
+    const benchmarks = valueBenchmarks(listings);
+    return rankByMetric(listings, (listing) => valueRatio(listing, benchmarks), { descending: true });
+  }
+  const metric = VALUE_SORTS[key];
+  if (!metric) return listings;
+  return rankByMetric(listings, metric);
+}
+
 const PRIVATE_ROOM =
   /\b(private room|room for rent|rooms?\s*&\s*shares?|roommate|shared room|single room|share[d]? (?:a )?room|shared (?:bathroom|kitchen)|common kitchen|sro|single.room occupancy|habitaci[oó]n (?:privada|en alquiler)|cuarto (?:en renta|en alquiler)|chambre (?:priv[eé]e|[aà] louer))\b/i;
 
@@ -24,6 +150,7 @@ export function isPrivateRoom(text) {
 const HOUSE_WORDS = /\b(houses?|townhomes?|townhouses?|duplex)\b/i;
 const FLAT_WORDS = /\b(apartments?|flats?|condos?|lofts?)\b/i;
 const STUDIO_WORD = /\bstudios?\b/i;
+const MULTIFAMILY_WORDS = /\b(multi-family|multifamily|duplex|triplex|fourplex|\d+[- ]?unit(?:s)?)\b/i;
 // "1BD", "2BR", "1 Bedroom", "Home", "unit" all describe a self-contained rental.
 const BEDROOM_WORDS = /\b\d+\s*(?:bd|br|beds?|bedrooms?)\b|\b(?:one|two|three|four)\s+bedrooms?\b/i;
 const DWELLING_WORDS = /\b(homes?|units?|residences?)\b/i;
@@ -35,6 +162,7 @@ export function homeCheck(requestedType, text) {
   const studio = STUDIO_WORD.test(value);
   const house = HOUSE_WORDS.test(value);
   const flat = FLAT_WORDS.test(value);
+  const multifamily = MULTIFAMILY_WORDS.test(value);
   const sleeping = BEDROOM_WORDS.test(value);
   const dwelling = DWELLING_WORDS.test(value);
   if (type === "studio") {
@@ -45,6 +173,13 @@ export function homeCheck(requestedType, text) {
   if (type === "house") {
     if (house) return "pass";
     if (flat || studio) return "fail";
+    return "unknown";
+  }
+  if (type === "multifamily") {
+    if (multifamily) return "pass";
+    // A duplex/triplex/etc. also matches HOUSE_WORDS, so only a single-family-only
+    // mention (house true, multifamily false) counts as a contradiction here.
+    if (flat || studio || (house && !multifamily)) return "fail";
     return "unknown";
   }
   // A flat is the default request: a house-only card contradicts it.
@@ -113,7 +248,7 @@ export function canonicalListingUrl(href) {
 // Detail-page facts only fill gaps, or replace a card value the card itself flagged as uncertain.
 export function mergeDetail(listing, detail) {
   const merged = { ...(listing || {}) };
-  for (const key of ["beds", "baths", "sqft", "address"]) {
+  for (const key of ["beds", "baths", "sqft", "lot", "address"]) {
     if (detail?.[key]) merged[key] = detail[key];
   }
   const uncertain = /\+|\bfrom\b|starting|[-–]\s*\$?\d/i.test(String(merged.price || ""));
@@ -195,7 +330,7 @@ export function listingAgeDays(listing, now = Date.now()) {
   return null;
 }
 
-export function selectListings({ groups, minPrice, maxPrice, requestedType, location, daysListed, now = Date.now(), limit = 18 }) {
+export function selectListings({ groups, minPrice, maxPrice, requestedType, location, daysListed, mode = "rent", now = Date.now(), limit = 18 }) {
   const seen = new Set();
   const kept = [];
   const countsBySource = {};
@@ -213,7 +348,7 @@ export function selectListings({ groups, minPrice, maxPrice, requestedType, loca
       const place = locationCheck(listing, location);
       const age = listingAgeDays(listing, now);
       const recent = !daysListed ? "pass" : age == null ? "unknown" : age <= daysListed ? "pass" : "fail";
-      reason ||= isPrivateRoom(text) ? "Excluded: room or shared facilities"
+      reason ||= (mode !== "buy" && isPrivateRoom(text)) ? "Excluded: room or shared facilities"
         : mismatchesHomeType(requestedType, text) ? "Different home type"
         : value != null && (value < minPrice || value > maxPrice) ? "Outside your budget"
         : place === "fail" ? "Outside your requested city"

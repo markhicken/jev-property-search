@@ -84,6 +84,14 @@
               <label><input type="checkbox" name="source" value="zillow" checked /><span>Zillow</span></label>
             </div>
 
+            <div class="field-group">
+              <span class="field-label">Rent or buy</span>
+              <div class="segment" role="group" aria-label="Rent or buy">
+                <label><input type="radio" name="listing-mode" value="rent" /><span>Rent</span></label>
+                <label><input type="radio" name="listing-mode" value="buy" checked /><span>Buy</span></label>
+              </div>
+            </div>
+
             <label class="field-label" for="location">Where</label>
             <div class="field location-field">
               <span class="pin" aria-hidden="true"></span>
@@ -91,20 +99,21 @@
             </div>
 
             <div class="field-group">
-              <label class="field-label" for="min-price">Monthly budget</label>
+              <label class="field-label" id="budget-label" for="min-price">Total budget</label>
               <div class="price-grid">
                 <label class="field price-field"><span>Min</span><span class="currency">$</span><input id="min-price" name="min-price" inputmode="numeric" value="0" /></label>
                 <span class="price-dash">—</span>
-                <label class="field price-field"><span>Max</span><span class="currency">$</span><input id="max-price" name="max-price" inputmode="numeric" value="2,000" /></label>
+                <label class="field price-field"><span>Max</span><span class="currency">$</span><input id="max-price" name="max-price" inputmode="numeric" value="600,000" /></label>
               </div>
             </div>
 
             <div class="field-group">
               <span class="field-label">Home type</span>
               <div class="segment" role="group" aria-label="Home type">
-                <label><input type="radio" name="home-type" value="flat" checked /><span>Apartment</span></label>
+                <label><input type="radio" name="home-type" value="flat" /><span>Apartment</span></label>
                 <label><input type="radio" name="home-type" value="studio" /><span>Studio</span></label>
-                <label><input type="radio" name="home-type" value="house" /><span>House</span></label>
+                <label><input type="radio" name="home-type" value="house" checked /><span>House</span></label>
+                <label><input type="radio" name="home-type" value="multifamily" /><span>Multi-family</span></label>
               </div>
             </div>
 
@@ -116,6 +125,15 @@
                 <option value="30" selected>Last four weeks</option>
               </select>
               <span aria-hidden="true">⌄</span>
+            </div>
+
+            <div class="field-group">
+              <span class="field-label">Search area</span>
+              <div class="segment" role="group" aria-label="Search area">
+                <label><input type="radio" name="scope" value="city" /><span>City</span></label>
+                <label><input type="radio" name="scope" value="metro" checked /><span>Metro</span></label>
+                <label><input type="radio" name="scope" value="nearby" /><span>+ Nearby</span></label>
+              </div>
             </div>
 
             <div class="filter-note">
@@ -155,7 +173,7 @@
             <div class="source-tabs" id="source-tabs" aria-label="Search browser tabs" hidden></div>
             <div class="browser-bar">
               <div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div>
-              <div class="address"><span class="lock" aria-hidden="true"></span><span id="url">Search across 4 rental marketplaces</span></div>
+              <div class="address"><span class="lock" aria-hidden="true"></span><span id="url">Search across 4 marketplaces</span></div>
               <span class="live-badge offline" id="browser-live"><i></i><span>WAITING</span></span>
             </div>
             <div class="viewport" id="viewport">
@@ -214,6 +232,18 @@
           <section class="report" id="report" hidden>
             <div class="report-head">
               <div><p class="kicker">MATCH REPORT</p><h3 id="report-title">Homes worth a closer look</h3></div>
+              <label class="sort-field"><span>Sort by</span>
+                <div class="field select-field">
+                  <select id="sort-select">
+                    <option value="default" selected>Recommended</option>
+                    <option value="value_ratio">Best value</option>
+                    <option value="price_per_sqft">Price ÷ sqft</option>
+                    <option value="price_per_acre">Price ÷ lot (acre)</option>
+                    <option value="price_per_value">Price ÷ total sqft (home + lot)</option>
+                  </select>
+                  <span aria-hidden="true">⌄</span>
+                </div>
+              </label>
               <span id="report-count">0 listings</span>
             </div>
             <div class="report-badges" id="report-badges"></div>

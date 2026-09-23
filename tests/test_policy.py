@@ -6,6 +6,7 @@ ending a search early, and assert the policy stays site-agnostic and value-free.
 """
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -94,3 +95,15 @@ def test_browsing_policy_helper_joins_operation_and_target_rules():
     assert NEXT_ACTION in policy and TARGET in policy
     assert policy == f"{NEXT_ACTION}\n\n{TARGET}"
     assert browsing_policy() == policy  # deterministic, no hidden state
+
+
+def test_no_hardcoded_location_in_demo_start_urls():
+    # demo.py used to hardcode San Francisco's Craigslist/Redfin/Zillow start URLs, so every
+    # search opened the same city regardless of what the user requested. Start URLs must come
+    # from jev_ultrafast.urls.build_start_url, not a literal in demo.py.
+    import jev_ultrafast.demo as demo_module
+
+    source = Path(demo_module.__file__).read_text()
+    leaks = ["san-francisco", "37.7429", "-122.433", "17151", "san_francisco"]
+    for leak in leaks:
+        assert leak not in source.lower(), f"hardcoded location leaked into demo.py: {leak!r}"

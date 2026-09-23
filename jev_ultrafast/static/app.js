@@ -1,5 +1,5 @@
 import { parseSearchQuery } from "./query.js";
-import { escapeHtml as escape, listingFacts, selectListings, canonicalListingUrl, mergeDetail } from "./report.js";
+import { escapeHtml as escape, listingFacts, selectListings, canonicalListingUrl, mergeDetail, sortByValue, valueMetrics, valueBenchmarks, valueRatio, listingAddress, mapsUrl } from "./report.js";
 import { summarizeTelemetry, dollars, duration, actionCost, describeAction, describeStop, classifyPage, normalizeBudget, humanizeError, estimateCost, describeRate, compactTokens } from "./telemetry.js";
 
 const $ = (id) => document.getElementById(id);
@@ -27,18 +27,83 @@ const SESSION_KEY = "hearth-search-v2";
 const HISTORY_KEY = "hearth-searches";
 const DEVELOPER_KEY = "hearth-developer";
 const sourceLabels = { queued: "Queued", working: "Searching", done: "Finished", blocked: "Partial", failed: "Failed", stopped: "Stopped", challenge: "Bot check", signin: "Needs sign-in", ratelimit: "Rate limited" };
+const HOME_TYPE_LABELS = { flat: "Apartment", studio: "Studio", house: "House", multifamily: "Multi-family" };
+const HOME_TYPE_GOAL_WORDS = { flat: "apartment", studio: "studio", house: "house", multifamily: "multi-family property" };
 const WALL_KINDS = ["challenge", "signin", "ratelimit"];
 
 function formSettings() {
   return {
     location: $("location").value.trim(),
+    mode: document.querySelector('input[name="listing-mode"]:checked')?.value || "rent",
     minPrice: Number(numericValue("min-price")),
     maxPrice: Number(numericValue("max-price")),
     requestedType: document.querySelector('input[name="home-type"]:checked').value,
     daysListed: Number($("date-listed").value),
     dateLabel: $("date-listed").selectedOptions[0].textContent,
+    scope: document.querySelector('input[name="scope"]:checked')?.value || "metro",
     preference: $("goal").value.trim(),
   };
+}
+
+// Everything the user configures in the form, flattened for server-side storage.
+// Chrome runs in a throwaway profile each launch, so localStorage cannot survive a
+// restart; these settings live in a file on the host instead.
+function gatherSettings() {
+  return {
+    ...formSettings(),
+    sources: [...document.querySelectorAll('input[name="source"]:checked')].map(input => input.value),
+    sort: $("sort-select").value,
+    developer: $("developer").checked,
+    overlays: $("overlays").checked,
+  };
+}
+
+// Restore saved settings into the form. Absent keys keep the page defaults.
+function applySavedSettings(saved) {
+  if (!saved || typeof saved !== "object") return;
+  if (typeof saved.location === "string") $("location").value = saved.location;
+  if (typeof saved.preference === "string") $("goal").value = saved.preference;
+  if (saved.mode === "rent" || saved.mode === "buy") {
+    const radio = document.querySelector(`input[name="listing-mode"][value="${saved.mode}"]`);
+    if (radio) radio.checked = true;
+  }
+  if (Number(saved.minPrice) > 0) $("min-price").value = Number(saved.minPrice).toLocaleString("en-US");
+  if (Number(saved.maxPrice) > 0) $("max-price").value = Number(saved.maxPrice).toLocaleString("en-US");
+  if (HOME_TYPE_LABELS[saved.requestedType]) {
+    const radio = document.querySelector(`input[name="home-type"][value="${saved.requestedType}"]`);
+    if (radio) radio.checked = true;
+  }
+  if (["1", "7", "30"].includes(String(saved.daysListed))) $("date-listed").value = String(saved.daysListed);
+  if (["city", "metro", "nearby"].includes(saved.scope)) {
+    const radio = document.querySelector(`input[name="scope"][value="${saved.scope}"]`);
+    if (radio) radio.checked = true;
+  }
+  if (Array.isArray(saved.sources) && saved.sources.some(name => sources[name])) {
+    for (const input of document.querySelectorAll('input[name="source"]')) input.checked = saved.sources.includes(input.value);
+  }
+  if ($("sort-select").querySelector(`option[value="${saved.sort}"]`)) $("sort-select").value = saved.sort;
+  if (typeof saved.overlays === "boolean") {
+    $("overlays").checked = saved.overlays;
+    $("targets").hidden = !saved.overlays;
+  }
+  if (typeof saved.developer === "boolean") {
+    $("developer").checked = saved.developer;
+    document.body.classList.toggle("developer", saved.developer);
+  }
+}
+
+let persistTimer = null;
+// Best-effort autosave, debounced so a burst of edits writes once. Losing a single
+// write is harmless — the next change resaves the full form.
+function persistSettings() {
+  if (persistTimer) window.clearTimeout(persistTimer);
+  persistTimer = window.setTimeout(() => {
+    fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Demo-Token": token },
+      body: JSON.stringify(gatherSettings()),
+    }).catch(() => { /* persistence is best-effort */ });
+  }, 400);
 }
 
 function syncUrl(settings) {
@@ -46,10 +111,12 @@ function syncUrl(settings) {
   // The search id makes every search addressable: ?s=<uuid> plus its filters.
   if (run?.id) params.set("s", run.id);
   params.set("location", settings.location);
+  params.set("mode", settings.mode);
   params.set("min", String(settings.minPrice));
   params.set("max", String(settings.maxPrice));
   params.set("type", settings.requestedType);
   params.set("days", String(settings.daysListed));
+  params.set("scope", settings.scope);
   params.set("sources", runSources.join(","));
   if (settings.preference) params.set("q", settings.preference);
   history.replaceState(null, "", `?${params}`);
@@ -64,6 +131,7 @@ function rememberSearch() {
       id: run.id,
       startedAt: run.startedAt,
       location: run.settings.location,
+      mode: run.settings.mode,
       minPrice: run.settings.minPrice,
       maxPrice: run.settings.maxPrice,
       requestedType: run.settings.requestedType,
@@ -84,6 +152,10 @@ function applyUrlSettings() {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   };
   if (params.get("location")) $("location").value = params.get("location");
+  if (["rent", "buy"].includes(params.get("mode"))) {
+    const radio = document.querySelector(`input[name="listing-mode"][value="${params.get("mode")}"]`);
+    if (radio) radio.checked = true;
+  }
   if (params.get("q")) $("goal").value = params.get("q");
   const min = amount(params.get("min"));
   const max = amount(params.get("max"));
@@ -95,6 +167,10 @@ function applyUrlSettings() {
     if (radio) radio.checked = true;
   }
   if (["1", "7", "30"].includes(params.get("days"))) $("date-listed").value = params.get("days");
+  if (["city", "metro", "nearby"].includes(params.get("scope"))) {
+    const radio = document.querySelector(`input[name="scope"][value="${params.get("scope")}"]`);
+    if (radio) radio.checked = true;
+  }
   const chosen = (params.get("sources") || "").split(",").filter(name => sources[name]);
   if (chosen.length) {
     for (const input of document.querySelectorAll('input[name="source"]')) input.checked = chosen.includes(input.value);
@@ -146,10 +222,10 @@ function acceptState(source, data) {
 
 
 const sources = {
-  craigslist: { name: "Craigslist", address: "craigslist.org/search/city/san-francisco-ca · 4.8 mi" },
+  craigslist: { name: "Craigslist", address: "craigslist.org" },
   marketplace: { name: "Facebook Marketplace", address: "facebook.com/marketplace" },
-  redfin: { name: "Redfin", address: "redfin.com/San-Francisco/apartments-for-rent" },
-  zillow: { name: "Zillow", address: "zillow.com/san-francisco-ca/rentals" },
+  redfin: { name: "Redfin", address: "redfin.com" },
+  zillow: { name: "Zillow", address: "zillow.com" },
 };
 let runSources = Object.keys(sources);
 
@@ -178,28 +254,48 @@ function numericValue(id) {
   return $(id).value.replace(/[^0-9]/g, "");
 }
 
+const SCOPE_GOAL = {
+  city: (place) => `Keep the search within the city limits of ${place}.`,
+  metro: (place) => `Cover the entire ${place} metro area, not only the city limits — if the site allows, expand the map or widen the search area to include the surrounding metro.`,
+  nearby: (place) => `Cover the ${place} metro area and surrounding nearby cities — use the site's "search nearby", radius, or map-zoom controls to widen coverage as far as is reasonable.`,
+};
+
 function buildGoal(source = activeSource) {
   const settings = run?.settings || formSettings();
-  const type = settings.requestedType === "flat" ? "apartment" : settings.requestedType;
+  const buying = settings.mode === "buy";
+  const type = HOME_TYPE_GOAL_WORDS[settings.requestedType] || settings.requestedType;
   return [
-    `Search ${sources[source].name} rental listings for a ${type} in ${settings.location}.`,
-    `Set the monthly price between $${settings.minPrice} and $${settings.maxPrice}, and show listings from the ${settings.dateLabel.toLowerCase()}.`,
+    `Search ${sources[source].name} ${buying ? "for-sale" : "rental"} listings for a ${type} in ${settings.location}.`,
+    (SCOPE_GOAL[settings.scope] || SCOPE_GOAL.metro)(settings.location),
+    `Set the ${buying ? "total price" : "monthly price"} between $${settings.minPrice} and $${settings.maxPrice}` +
+      (buying ? "." : `, and show listings from the ${settings.dateLabel.toLowerCase()}.`),
     settings.preference ? `The user's additional preference is: ${settings.preference}.` : "",
     "Apply every requested filter before reviewing results.",
     "Then collect as many matching listings as possible: scroll the results so more cards load, and keep",
     "advancing to further pages of results while more pages exist.",
     "Do not stop after the first screen of results, and do not re-open a filter you have already applied.",
-    "Do not message sellers, save listings, or start a transaction.",
+    buying ? "Do not contact sellers, save listings, or start a transaction."
+      : "Do not message sellers, save listings, or start a transaction.",
   ].filter(Boolean).join(" ");
 }
 
 function buildTextValues() {
   const settings = run?.settings || formSettings();
+  const buying = settings.mode === "buy";
   const values = {
-    location: { value: settings.location, description: "The requested city or location for the rental search." },
-    minimum_monthly_price: { value: String(settings.minPrice), description: "The minimum monthly rental price, without a currency symbol." },
-    maximum_monthly_price: { value: String(settings.maxPrice), description: "The maximum monthly rental price, without a currency symbol." },
-    home_type: { value: settings.requestedType === "flat" ? "apartment" : settings.requestedType, description: "The requested kind of home or rental property." },
+    location: { value: settings.location, description: `The requested city or location for the ${buying ? "home purchase" : "rental"} search.` },
+    [buying ? "minimum_price" : "minimum_monthly_price"]: {
+      value: String(settings.minPrice),
+      description: `The minimum ${buying ? "total purchase price" : "monthly rental price"}, without a currency symbol.`,
+    },
+    [buying ? "maximum_price" : "maximum_monthly_price"]: {
+      value: String(settings.maxPrice),
+      description: `The maximum ${buying ? "total purchase price" : "monthly rental price"}, without a currency symbol.`,
+    },
+    home_type: {
+      value: HOME_TYPE_GOAL_WORDS[settings.requestedType] || settings.requestedType,
+      description: `The requested kind of home or ${buying ? "property to buy" : "rental property"}.`,
+    },
   };
   if (settings.preference) values.search_preference = { value: settings.preference, description: "The user's exact search preference." };
   return values;
@@ -443,16 +539,56 @@ function checkBadges(listing) {
   return Object.entries(listing.checks || {}).map(([key, value]) => `<span class="check-badge ${value}">${value === "pass" ? "✓ " + labels[key] : "? " + unknown[key]}</span>`).join("");
 }
 
-function listingCard(listing, index = null) {
+// Inline icons for the per-card address actions. Monochrome strokes inherit currentColor.
+const COPY_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+const PIN_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s7-6.5 7-11a7 7 0 1 0-14 0c0 4.5 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>';
+
+// Value ratio is benchmark ÷ price-efficiency, so above 1 is cheaper than the typical
+// result. Four tiers, best first: a standout deal, modestly under market, roughly at
+// market, then a premium. The "Best value" sort orders by this same ratio.
+const VALUE_TIERS = [
+  { min: 1.15, label: "Great value", cls: "good" },
+  { min: 1.05, label: "Below market", cls: "mild" },
+  { min: 0.95, label: "Fair value", cls: "fair" },
+  { min: 0, label: "Above market", cls: "poor" },
+];
+
+// Price efficiency on every card: dollars per finished sqft, dollars per lot acre, and a
+// combined value ratio versus the typical result in this set (above 1× = a better value
+// on the metrics available, judged on both price/sqft and price/acre together).
+function valueFacts(listing, benchmarks) {
+  const metrics = valueMetrics(listing);
+  const parts = [];
+  if (metrics.pricePerSqft != null) parts.push(`<span title="Price per finished square foot">$${Math.round(metrics.pricePerSqft).toLocaleString("en-US")}/sqft</span>`);
+  if (metrics.pricePerAcre != null) parts.push(`<span title="Price per lot acre">$${Math.round(metrics.pricePerAcre).toLocaleString("en-US")}/acre</span>`);
+  const ratio = valueRatio(listing, benchmarks);
+  if (ratio != null) {
+    const tier = VALUE_TIERS.find(item => ratio >= item.min);
+    parts.push(`<span class="value-ratio ${tier.cls}" title="Value versus the typical result, on price per sqft and per acre together">${tier.label} · ${ratio.toFixed(2)}×</span>`);
+  }
+  return parts.join("");
+}
+
+function listingCard(listing, index = null, benchmarks = null) {
+  const buying = (run?.settings.mode || "rent") === "buy";
   const amenities = (listing.amenities || []).slice(0, 3).map(word => `<span class="amenity">${escape(word)}</span>`).join("");
-  const facts = listingFacts(listing).filter(fact => fact.available).map(fact => `<span>${escape(fact.value)}</span>`).join("") + amenities;
+  const facts = listingFacts(listing).filter(fact => fact.available).map(fact => `<span>${escape(fact.value)}</span>`).join("") + valueFacts(listing, benchmarks) + amenities;
   const address = listing.address ? `<span class="listing-address">${escape(listing.address)}</span>` : "";
   const description = listing.description ? `<p class="listing-summary">${escape(listing.description)}</p>` : "";
   const savings = (run?.settings.maxPrice || 0) - listing.priceValue;
+  const budgetLabel = buying ? "your budget" : "your monthly budget";
   const reason = listing.checks?.price === "pass" && savings > 0
-    ? `$${savings.toLocaleString("en-US")} below your monthly budget`
-    : listing.checks?.price === "pass" ? "Within your monthly budget" : "Starting price — confirm the available unit";
-  return `<article class="listing-card">${index != null ? `<span class="shortlist-number">0${index + 1}</span>` : ""}<a href="${escape(safeUrl(listing.href))}" target="_blank" rel="noopener noreferrer">${imageMarkup(listing)}<div class="listing-body"><strong class="listing-price">${escape(listing.price)}<small> monthly rent</small></strong><span class="listing-title">${escape(listing.title)}</span>${address}<div class="listing-facts">${facts || '<span>Details not provided</span>'}</div><p class="match-reason">${escape(reason)}</p>${description}<div class="listing-checks">${checkBadges(listing)}</div><span class="listing-link">View original listing ↗</span></div></a></article>`;
+    ? `$${savings.toLocaleString("en-US")} below ${budgetLabel}`
+    : listing.checks?.price === "pass" ? `Within ${budgetLabel}` : "Starting price — confirm the available unit";
+  const priceSuffix = buying ? "" : "<small> monthly rent</small>";
+  // Copy-address and Google Maps actions, shown only when the listing has a real street
+  // address. They sit outside the card's own anchor to avoid nesting interactive elements.
+  const location = run?.settings.location || formSettings().location;
+  const fullAddress = listingAddress(listing, location);
+  const actions = fullAddress
+    ? `<div class="card-actions"><button type="button" class="card-action" data-copy-address="${escape(fullAddress)}" title="Copy address" aria-label="Copy address">${COPY_ICON}</button><a class="card-action" href="${escape(mapsUrl(fullAddress))}" target="_blank" rel="noopener noreferrer" title="Open in Google Maps" aria-label="Open in Google Maps">${PIN_ICON}</a></div>`
+    : "";
+  return `<article class="listing-card">${index != null ? `<span class="shortlist-number">0${index + 1}</span>` : ""}<a href="${escape(safeUrl(listing.href))}" target="_blank" rel="noopener noreferrer">${imageMarkup(listing)}<div class="listing-body"><strong class="listing-price">${escape(listing.price)}${priceSuffix}</strong><span class="listing-title">${escape(listing.title)}</span>${address}<div class="listing-facts">${facts || '<span>Details not provided</span>'}</div><p class="match-reason">${escape(reason)}</p>${description}<div class="listing-checks">${checkBadges(listing)}</div><span class="listing-link">View original listing ↗</span></div></a>${actions}</article>`;
 }
 
 function updateNumber(id, value) {
@@ -589,12 +725,19 @@ function renderReport() {
   $("report-title").textContent = matches ? "The search, so far." : busy ? "Looking for your kind of place…" : "No matching candidates yet.";
   $("report-count").textContent = `${plural(qualified.length, "match", "matches")} · ${pending.length} to review`;
   $("report-context").textContent = matches ? "Matches pass price, city, home type and recency checks on the listing. Availability and accuracy still need confirmation with the source." : "Results appear here as the search progresses. Unknown facts never count as passed checks.";
-  const type = settings.requestedType === "flat" ? "Apartment" : settings.requestedType;
-  const chips = [settings.location, `Up to $${settings.maxPrice.toLocaleString("en-US")}/mo`, type, settings.dateLabel];
+  const buying = settings.mode === "buy";
+  const type = HOME_TYPE_LABELS[settings.requestedType] || settings.requestedType;
+  const priceChip = `Up to $${settings.maxPrice.toLocaleString("en-US")}${buying ? "" : "/mo"}`;
+  const scopeChip = { city: "City only", metro: "Metro area", nearby: "Metro + nearby" }[settings.scope] || "Metro area";
+  const chips = [settings.location, scopeChip, priceChip, type, settings.dateLabel];
   $("report-badges").innerHTML = chips.map(label => `<span class="filter-badge">${escape(label)}</span>`).join("");
   $("search-chips").innerHTML = chips.map(label => `<span>${escape(label)}</span>`).join("");
   $("run-summary").hidden = !run;
-  const html = listings.map(item => listingCard(item)).join("");
+  // One benchmark across the whole result set, so the value ratio on the grid and the
+  // shortlist judge each listing against the same typical result.
+  const benchmarks = valueBenchmarks(listings);
+  const sorted = sortByValue(listings, $("sort-select").value);
+  const html = sorted.map(item => listingCard(item, null, benchmarks)).join("");
   if ($("report-grid").dataset.rendered !== html) {
     $("report-grid").innerHTML = html;
     $("report-grid").dataset.rendered = html;
@@ -613,7 +756,7 @@ function renderReport() {
     $("finale-status").textContent = partial ? "Partial coverage" : "Browsing finished";
     $("finale-title").textContent = qualified.length ? "Start picturing yourself here." : pending.length ? "Promising places. A few details to check." : "Let's adjust the search.";
     $("finale-context").textContent = `${qualified.length} matches and ${pending.length} candidates to review. ${partial ? "Some sources could not finish; results are retained below." : "Selected sources finished browsing."} ${qualified.length ? "Ranked by completeness, then price. Confirm availability on the original listing." : "No candidate passed all four listing checks."}`;
-    $("shortlist-grid").innerHTML = (qualified.length ? qualified : pending).slice(0, 3).map((item, index) => listingCard(item, index)).join("");
+    $("shortlist-grid").innerHTML = (qualified.length ? qualified : pending).slice(0, 3).map((item, index) => listingCard(item, index, benchmarks)).join("");
   }
 }
 
@@ -659,7 +802,13 @@ async function retrySource(source) {
     setActivity(`Reopening ${sources[source].name}…`);
     render();
     try {
-      await call("reset", { scenario: source, goal: buildGoal(source), text_values: buildTextValues() });
+      await call("reset", {
+        scenario: source,
+        location: run.settings.location,
+        mode: run.settings.mode,
+        goal: buildGoal(source),
+        text_values: buildTextValues(),
+      });
       await runAutomatically();
       await enrichCollected(source);
     } finally {
@@ -763,12 +912,12 @@ async function startSearch(event) {
   applyRequestedFilters();
   const settings = formSettings();
   if (!settings.location || !numericValue("max-price") || settings.maxPrice <= 0 || settings.minPrice > settings.maxPrice) {
-    showError("Choose a city and a maximum rent above zero. The minimum cannot exceed the maximum.");
+    showError("Choose a city and a maximum price above zero. The minimum cannot exceed the maximum.");
     return;
   }
   runSources = [...document.querySelectorAll('input[name="source"]:checked')].map(input => input.value);
   if (!runSources.length) {
-    showError("Choose at least one rental marketplace.");
+    showError("Choose at least one marketplace.");
     return;
   }
   automatic = false;
@@ -798,7 +947,14 @@ async function startSearch(event) {
         setActivity(`Opening ${sources[source].name}…`);
         render();
         try {
-          await call("reset", { scenario: source, goal: buildGoal(source), text_values: buildTextValues() });
+          await call("reset", {
+            scenario: source,
+            location: run.settings.location,
+            mode: run.settings.mode,
+            scope: run.settings.scope,
+            goal: buildGoal(source),
+            text_values: buildTextValues(),
+          });
           if (batchCancelled) { sourceProgress.set(source, "stopped"); break; }
           await runAutomatically();
           if (!batchCancelled) await enrichCollected(source);
@@ -823,7 +979,7 @@ async function startSearch(event) {
       setActivity(batchCancelled ? "Stopped — your discoveries are saved" : partial ? "Partial search — review what we found" : "Browsing finished — your shortlist is ready");
       saveRun();
     }
-  }, "Opening rental marketplaces…");
+  }, "Opening marketplaces…");
   render();
 }
 
@@ -832,8 +988,13 @@ function updateSourceChrome() {
   $("source-count").textContent = `${selected} selected`;
   $("scenario").value = selected > 1 ? "all" : document.querySelector('input[name="source"]:checked')?.value || "";
   if (!state?.page) {
-    $("url").textContent = selected ? `Search across ${selected} rental marketplace${selected === 1 ? "" : "s"}` : "Choose a source";
+    $("url").textContent = selected ? `Search across ${selected} marketplace${selected === 1 ? "" : "s"}` : "Choose a source";
   }
+}
+
+function updateBudgetLabel() {
+  const buying = document.querySelector('input[name="listing-mode"]:checked')?.value === "buy";
+  $("budget-label").textContent = buying ? "Total budget" : "Monthly budget";
 }
 
 $("task-form").addEventListener("submit", startSearch);
@@ -844,6 +1005,18 @@ $("search-form").addEventListener("submit", (event) => {
 document.querySelectorAll('input[name="source"]').forEach((input) => {
   input.addEventListener("change", updateSourceChrome);
 });
+document.querySelectorAll('input[name="listing-mode"]').forEach((input) => {
+  input.addEventListener("change", updateBudgetLabel);
+});
+$("sort-select").addEventListener("change", renderReport);
+
+// Persist every UI change so a restart restores the same configuration. The form
+// controls live across two forms plus a few standalone toggles.
+for (const form of [$("task-form"), $("search-form")]) {
+  form.addEventListener("input", persistSettings);
+  form.addEventListener("change", persistSettings);
+}
+for (const id of ["sort-select", "developer", "overlays"]) $(id).addEventListener("change", persistSettings);
 
 $("choose").addEventListener("click", () =>
   perform(() => call("predict"), "Jev is comparing the actions…"),
@@ -1060,6 +1233,20 @@ for (const mode of ["activity", "filtering"]) {
     $("filter-history").hidden = mode !== "filtering";
   });
 }
+// The copy-address icon writes the listing's address to the clipboard with brief feedback.
+document.addEventListener("click", async event => {
+  const button = event.target.closest("[data-copy-address]");
+  if (!button) return;
+  event.preventDefault();
+  try {
+    await navigator.clipboard.writeText(button.dataset.copyAddress);
+    button.classList.add("copied");
+    const previous = button.title;
+    button.title = "Address copied";
+    window.setTimeout(() => { button.classList.remove("copied"); button.title = previous; }, 1400);
+  } catch { /* Clipboard may be blocked; the map link still works. */ }
+});
+
 // Failed listing images get an honest fallback, not a broken image icon.
 document.addEventListener("error", event => {
   const image = event.target;
@@ -1072,11 +1259,11 @@ document.addEventListener("error", event => {
 async function initialize() {
   const params = new URLSearchParams(location.search);
   const requestedId = params.get("s");
+  let restoredRun = false;
   try {
     if (!params.size) {
-      // A bare home page is a clean slate: no restored run, no stale banner, empty request.
+      // A bare home page has no run to restore, but saved settings still apply below.
       sessionStorage.removeItem(SESSION_KEY);
-      $("goal").value = "";
     } else {
       const saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
       const matchesRequested = saved?.run && (!requestedId || saved.run.id === requestedId);
@@ -1099,9 +1286,14 @@ async function initialize() {
         $("date-listed").value = String(settings.daysListed);
         const type = document.querySelector(`input[name="home-type"][value="${settings.requestedType}"]`);
         if (type) type.checked = true;
+        const mode = document.querySelector(`input[name="listing-mode"][value="${settings.mode}"]`);
+        if (mode) mode.checked = true;
+        const scope = document.querySelector(`input[name="scope"][value="${settings.scope || "metro"}"]`);
+        if (scope) scope.checked = true;
         for (const input of document.querySelectorAll('input[name="source"]')) input.checked = runSources.includes(input.value);
         $("goal").value = settings.preference || "";
         state = sourceStates.get(activeSource) || [...sourceStates.values()].at(-1);
+        restoredRun = true;
         setActivity("Previous search restored — review your shortlist");
       } else {
         sessionStorage.removeItem(SESSION_KEY);
@@ -1125,8 +1317,18 @@ async function initialize() {
     state.configuration = {};
     showError("Cannot reach the local service. Saved results are retained. Restart the server and refresh to reconnect.");
   }
+  // Restore the last-used form settings from the host file (Chrome's per-run profile
+  // wipes localStorage). A restored run already carries its own settings, and any URL
+  // params applied next still win over these saved defaults.
+  if (!restoredRun) {
+    try {
+      const response = await fetch("/api/settings", { signal: AbortSignal.timeout(4000) });
+      if (response.ok) applySavedSettings(await response.json());
+    } catch { /* No saved settings yet, or the service is down; keep page defaults. */ }
+  }
   applyUrlSettings();
   updateSourceChrome();
+  updateBudgetLabel();
   render();
   // ?go=1 starts the URL-configured search immediately, for a scripted demo.
   if (params.get("go") === "1" && !run && state?.configuration?.typesafe) {

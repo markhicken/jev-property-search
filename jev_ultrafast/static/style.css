@@ -336,6 +336,9 @@ main { display: grid; grid-template-columns: 310px minmax(0, 1fr); min-height: c
 /* A wall is not an ordinary partial result; give it the alert tone. */
 .source-tab.challenge .tab-dot, .source-tab.ratelimit .tab-dot { background: #d87c58; box-shadow: 0 0 0 3px rgb(216 124 88 / .14); }
 .source-tab.signin .tab-dot { background: #cf9f56; box-shadow: 0 0 0 3px rgb(207 159 86 / .14); }
+/* Skipped: the area couldn't be resolved, so the source was never opened. Muted, not alarm. */
+.source-tab.skipped .tab-dot { background: #b9b3a6; }
+.source-tab.skipped small { color: #9a9488; }
 .browser-bar { height: 43px; display: grid; grid-template-columns: 70px minmax(0, 1fr) 70px; align-items: center; padding: 0 14px; border-bottom: 1px solid #dedfd9; background: #eeefe9; }
 .traffic { display: flex; gap: 5px; }
 .traffic i { width: 7px; height: 7px; border-radius: 50%; background: #c9cbc3; }

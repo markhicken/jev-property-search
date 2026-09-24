@@ -26,7 +26,7 @@ let pricing = null;
 const SESSION_KEY = "hearth-search-v2";
 const HISTORY_KEY = "hearth-searches";
 const DEVELOPER_KEY = "hearth-developer";
-const sourceLabels = { queued: "Queued", working: "Searching", done: "Finished", blocked: "Partial", failed: "Failed", stopped: "Stopped", challenge: "Bot check", signin: "Needs sign-in", ratelimit: "Rate limited" };
+const sourceLabels = { queued: "Queued", working: "Searching", done: "Finished", blocked: "Partial", failed: "Failed", skipped: "Skipped — area not found", stopped: "Stopped", challenge: "Bot check", signin: "Needs sign-in", ratelimit: "Rate limited" };
 const HOME_TYPE_LABELS = { flat: "Apartment", studio: "Studio", house: "House", multifamily: "Multi-family" };
 const HOME_TYPE_GOAL_WORDS = { flat: "apartment", studio: "studio", house: "house", multifamily: "multi-family property" };
 const WALL_KINDS = ["challenge", "signin", "ratelimit"];
@@ -317,6 +317,7 @@ async function call(name, body = {}, attempt = 0) {
   if (!response.ok) {
     const error = Error(response.status === 403 ? "The server restarted. Your partial results are saved; refresh to reconnect." : data.error || "Request failed");
     error.status = response.status;
+    error.skip = Boolean(data.skip);
     throw error;
   }
   if (data.pricing) pricing = data.pricing;
@@ -961,6 +962,15 @@ async function startSearch(event) {
         } catch (error) {
           automatic = false;
           await recoverState();
+          if (error.skip) {
+            // The source can't be pointed at the requested area, so it was never opened.
+            // Mark it skipped and move on rather than searching the wrong place.
+            sourceProgress.set(source, "skipped");
+            notice(error.message, "notice", source);
+            saveRun();
+            render();
+            continue;
+          }
           sourceProgress.set(source, "failed");
           notice(humanizeError(error.message), "error", source);
           showError(`${sources[source].name}: ${humanizeError(error.message)}`);

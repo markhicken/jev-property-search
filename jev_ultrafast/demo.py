@@ -29,6 +29,20 @@ STATIC_MIME = {
     ".json": "application/json",
 }
 
+SOURCE_NAMES = {
+    "craigslist": "Craigslist", "redfin": "Redfin",
+    "zillow": "Zillow", "marketplace": "Facebook Marketplace",
+}
+
+
+class SourceLocationUnavailable(ValueError):
+    """A source whose start URL can't be pointed at the requested location.
+
+    Raised so the source is skipped instead of opening its default region, which would
+    silently search the wrong area (e.g. the visitor's home Craigslist site).
+    """
+
+
 ROOT = Path(__file__).parent
 PORT = int(os.environ.get("TYPESAFE_DEMO_PORT", "8766"))
 HOST = (os.environ.get("TYPESAFE_DEMO_HOST") or "127.0.0.1").strip() or "127.0.0.1"
@@ -176,7 +190,19 @@ def command(name, body):
         close_browser()
         marketplaces = {"marketplace", "craigslist", "redfin", "zillow"}
         if scenario in marketplaces:
-            start_url = build_start_url(scenario, location, mode, scope).url
+            start = build_start_url(scenario, location, mode, scope)
+            # Craigslist and Redfin carry the search area inside the URL itself. When that
+            # area can't be resolved for the requested location, opening the page falls back
+            # to the site's own default region (e.g. the visitor's home Craigslist), silently
+            # searching the wrong place. Skip the source instead. Marketplace never encodes
+            # location in its URL and is steered to the area by the agent, and Zillow always
+            # embeds the location in its slug, so neither is pre-skipped here.
+            if start.needs_manual_region and scenario in {"craigslist", "redfin"}:
+                raise SourceLocationUnavailable(
+                    f"Couldn't pin {location or 'that location'} on {SOURCE_NAMES[scenario]}, "
+                    "so it was skipped to avoid searching the wrong area."
+                )
+            start_url = start.url
         elif scenario == "flights":
             start_url = "https://www.google.com/travel/flights?hl=en"
         else:
@@ -276,6 +302,10 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             result = command(self.path.removeprefix("/api/"), body)
             self.send(200, json.dumps(result))
+        except SourceLocationUnavailable as error:
+            # A skip, not a failure: the frontend advances to the next source instead of
+            # stopping the run or flagging it red.
+            self.send(400, json.dumps({"error": str(error), "skip": True}))
         except (ValueError, RuntimeError, TimeoutError) as error:
             self.send(400, json.dumps({"error": str(error)}))
         except Exception:

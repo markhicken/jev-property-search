@@ -55,10 +55,34 @@ def test_resolve_craigslist_region_matches_known_metro():
     assert resolve_craigslist_region("San Francisco", "CA") == ("sfbay", True)
 
 
-def test_resolve_craigslist_region_falls_back_for_unknown_city():
-    region, matched = resolve_craigslist_region("Nowheresville", "ZZ")
+def test_resolve_craigslist_region_falls_back_when_geocode_fails():
+    # No name match and no coordinates: nothing to be near, so it stays unmatched.
+    region, matched = resolve_craigslist_region("Nowheresville", "ZZ", geocode=lambda location: None)
     assert matched is False
     assert region == "www"
+
+
+def test_resolve_craigslist_region_uses_nearest_region_when_unmatched():
+    # An unlisted town geocoded near the Oregon coast resolves to the oregoncoast site
+    # rather than falling through to Craigslist's geo-redirecting default.
+    region, matched = resolve_craigslist_region("Depoe Bay", "OR", geocode=lambda location: (44.81, -124.06))
+    assert matched is True
+    assert region == "oregoncoast"
+
+
+def test_resolve_craigslist_region_skips_when_nearest_is_too_far():
+    # A point in the middle of the ocean is beyond every region, so it stays unmatched.
+    region, matched = resolve_craigslist_region("Far Away", None, geocode=lambda location: (0.0, -160.0))
+    assert matched is False
+    assert region == "www"
+
+
+def test_resolve_craigslist_region_prefers_exact_name_over_geocoding():
+    # A listed city never reaches the geocoder, so a fake that would raise proves it's unused.
+    def unused_geocode(location):
+        raise AssertionError("exact matches must not geocode")
+
+    assert resolve_craigslist_region("Lincoln City", "OR", geocode=unused_geocode) == ("oregoncoast", True)
 
 
 def test_resolve_redfin_city_path_uses_injected_fetch_only():
